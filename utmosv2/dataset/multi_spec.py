@@ -8,8 +8,11 @@ import torch
 
 from utmosv2.dataset._base import BaseDataset, DataDomainMixin
 from utmosv2.dataset._utils import (
+    INFERENCE_PHASES,
     extend_audio,
+    num_starts_to_cover,
     select_random_start,
+    select_starts,
 )
 
 if TYPE_CHECKING:
@@ -26,6 +29,10 @@ class MultiSpecDataset(BaseDataset):
     Dataset class for mel-spectrogram feature extractor. This class is responsible for
     loading audio data, generating multiple spectrograms for each sample, and
     applying the necessary transformations.
+
+    At inference the frames are cut deterministically so that they cover the whole audio
+    with at least a half-window overlap, and the inner mixup is disabled. The number of
+    frames therefore varies with the duration of the audio.
 
     Args:
         cfg (SimpleNamespace): The configuration object containing dataset and model settings.
@@ -48,11 +55,30 @@ class MultiSpecDataset(BaseDataset):
         specs = []
         length = int(self.cfg.dataset.spec_frames.frame_sec * self.cfg.sr)
         y = extend_audio(y, length, method=self.cfg.dataset.spec_frames.extend)
-        for _ in range(self.cfg.dataset.spec_frames.num_frames):
-            y1 = select_random_start(y, length)
+        num_frames = self.cfg.dataset.spec_frames.num_frames
+        is_inference = self.phase in INFERENCE_PHASES
+        if is_inference:
+            # Cover the whole audio with at least a half-window overlap. The count is
+            # rounded up to a multiple of `num_frames` so that the windows split into
+            # equally sized groups downstream, without duplicating any of them.
+            starts = select_starts(
+                y,
+                length,
+                num_starts_to_cover(
+                    y.shape[0], length, hop=length // 2, multiple_of=num_frames
+                ),
+            )
+        else:
+            starts = [-1] * num_frames  # placeholder; each frame is drawn at random
+        for start in starts:
+            y1 = (
+                y[start : start + length]
+                if is_inference
+                else select_random_start(y, length)
+            )
             for spec_cfg in self.cfg.dataset.specs:
                 spec = _make_spctrogram(self.cfg, spec_cfg, y1)
-                if self.cfg.dataset.spec_frames.mixup_inner:
+                if self.cfg.dataset.spec_frames.mixup_inner and not is_inference:
                     y2 = select_random_start(y, length)
                     spec2 = _make_spctrogram(self.cfg, spec_cfg, y2)
                     lmd = np.random.beta(

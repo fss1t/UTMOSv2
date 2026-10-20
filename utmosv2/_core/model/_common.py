@@ -118,9 +118,12 @@ class UTMOSv2ModelMixin(abc.ABC):
             num_workers (int):
                 Number of workers for data loading. Defaults to 0.
             batch_size (int):
-                Batch size for the data loader. Defaults to 16.
+                Ignored. The prediction consumes the whole audio, so the number of samples
+                per item varies and only a batch size of 1 can be collated. The
+                spectrogram backbones are still batched over the frame groups internally.
             num_repetitions (int):
-                Number of prediction repetitions to average results. Defaults to 1.
+                Ignored. The prediction is deterministic, so repeating it only recomputes
+                the same values.
             remove_silent_section (bool):
                 Whether to remove silent sections from the audio before prediction. Defaults to True.
             verbose (bool):
@@ -154,15 +157,28 @@ class UTMOSv2ModelMixin(abc.ABC):
         dataset = get_dataset(self._cfg, data_internal, self._cfg.phase)
         self._cfg.dataset.remove_silent_section = initial_state
 
+        if batch_size != 1:
+            warnings.warn(
+                f"`batch_size` ({batch_size}) is ignored: the prediction consumes the "
+                "whole audio, so the number of samples per item varies and only a batch "
+                "size of 1 can be collated. The spectrogram backbones are still batched "
+                "over the frame groups internally."
+            )
+        if num_repetitions != 1:
+            warnings.warn(
+                f"`num_repetitions` ({num_repetitions}) is ignored: the prediction is "
+                "deterministic and covers the whole audio, so repeating it only "
+                "recomputes the same values."
+            )
         dataloader = torch.utils.data.DataLoader(
             dataset,
-            batch_size=batch_size,
+            batch_size=1,
             shuffle=False,
             num_workers=num_workers,
             pin_memory=True,
         )
 
-        pred = self._predict_impl(dataloader, num_repetitions, device, verbose)
+        pred = self._predict_impl(dataloader, device, verbose)
 
         if data is not None:
             return torch.from_numpy(pred) if isinstance(data, torch.Tensor) else pred
@@ -265,31 +281,22 @@ class UTMOSv2ModelMixin(abc.ABC):
     def _predict_impl(
         self,
         dataloader: torch.utils.data.DataLoader,
-        num_repetitions: int,
         device: str | torch.device,
         verbose: bool,
     ) -> np.ndarray:
         self._model.eval().to(device)
-        res = 0.0
-        for i in range(num_repetitions):
-            pred = []
-            pbar = tqdm(
-                dataloader,
-                disable=not verbose,
-                total=len(dataloader),
-                desc=(
-                    f"Predicting [{i + 1}/{num_repetitions}]: "
-                    if num_repetitions > 1
-                    else "Predicting: "
-                ),
-            )
-            with torch.no_grad():
-                for t in pbar:
-                    x = t[:-1]
-                    x = [t.to(device, non_blocking=True) for t in x]
-                    with autocast():
-                        output = self._model(*x).squeeze(1)
-                    pred.append(output.cpu().numpy())
-            res += np.concatenate(pred) / num_repetitions  # type: ignore
-        assert isinstance(res, np.ndarray)
-        return res
+        pred = []
+        pbar = tqdm(
+            dataloader,
+            disable=not verbose,
+            total=len(dataloader),
+            desc="Predicting: ",
+        )
+        with torch.no_grad():
+            for t in pbar:
+                x = t[:-1]
+                x = [t.to(device, non_blocking=True) for t in x]
+                with autocast():
+                    output = self._model(*x).squeeze(1)
+                pred.append(output.cpu().numpy())
+        return np.concatenate(pred)

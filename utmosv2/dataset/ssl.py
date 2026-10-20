@@ -6,6 +6,7 @@ import torch
 
 from utmosv2.dataset._base import BaseDataset, DataDomainMixin
 from utmosv2.dataset._utils import (
+    INFERENCE_PHASES,
     extend_audio,
     select_random_start,
 )
@@ -21,6 +22,7 @@ class SSLDataset(BaseDataset):
     """
     Dataset class for SSL (Self-Supervised Learning) feature extractor.
     This class handles audio loading, extending, and random selection of a segment from the audio.
+    At inference the whole audio is passed through without cropping.
 
     Args:
         cfg (SimpleNamespace | ModuleType):
@@ -44,8 +46,11 @@ class SSLDataset(BaseDataset):
         """
         y, target = self._get_audio_and_mos(idx)
         length = int(self.cfg.dataset.ssl.duration * self.cfg.sr)
+        # Keep extending short audio even at inference: the model has never seen anything
+        # shorter than `duration`, and `remove_silent_section` can leave very little left.
         y = extend_audio(y, length, method="tile")
-        y = select_random_start(y, length)
+        if self.phase not in INFERENCE_PHASES:
+            y = select_random_start(y, length)
 
         return torch.from_numpy(y), target
 

@@ -20,7 +20,6 @@ def run_inference(
     cfg: Config,
     model: nn.Module,
     test_dataloader: torch.utils.data.DataLoader,
-    cycle: int,
     test_data: pd.DataFrame,
     device: torch.device,
 ) -> tuple[np.ndarray, dict[str, float] | None]:
@@ -30,13 +29,11 @@ def run_inference(
     Args:
         cfg (SimpleNamespace | ModuleType):
             Configuration object containing inference settings.
-            It includes settings for test-time augmentation (TTA) and reproducibility.
+            It includes settings for reproducibility.
         model (torch.nn.Module):
             The trained model to be used for inference.
         test_dataloader (torch.utils.data.DataLoader):
             Dataloader for the test dataset.
-        cycle (int):
-            Current cycle of test-time augmentation (TTA) if used.
         test_data (pd.DataFrame):
             DataFrame containing test data, used for metric calculation if reproducibility is enabled.
         device (torch.device):
@@ -52,7 +49,7 @@ def run_inference(
     pbar = tqdm(
         test_dataloader,
         total=len(test_dataloader),
-        desc=f"  [Inference] ({cycle + 1}/{cfg.inference.num_tta})",
+        desc="  [Inference]",
     )
 
     with torch.no_grad():

@@ -47,25 +47,22 @@ def main(cfg: Config) -> None:
         cfg.print_config = False  # type: ignore
         print(f"+*+*[[Fold {fold + 1}/{cfg.num_folds}]]" + "+*" * 30)
 
-        for cycle in range(cfg.inference.num_tta):
-            test_dataset = get_dataset(cfg, data, "test")
-            test_dataloader = get_dataloader(cfg, test_dataset, "test")
-            test_preds_tta, test_metrics_tta = run_inference(
-                cfg, model, test_dataloader, cycle, data, device
-            )
-            test_preds += test_preds_tta
-            if cfg.reproduce:
-                assert test_metrics_tta is not None
-                for k, v in test_metrics_tta.items():
-                    test_metrics[k] = test_metrics.get(k, 0) + v
+        test_dataset = get_dataset(cfg, data, "test")
+        test_dataloader = get_dataloader(cfg, test_dataset, "test")
+        test_preds_tta, test_metrics_tta = run_inference(
+            cfg, model, test_dataloader, data, device
+        )
+        test_preds += test_preds_tta
+        if cfg.reproduce:
+            assert test_metrics_tta is not None
+            for k, v in test_metrics_tta.items():
+                test_metrics[k] = test_metrics.get(k, 0) + v
 
     fold_cnt = 1 if 0 <= cfg.inference.fold < cfg.num_folds else cfg.num_folds
     print(f"Average of {fold_cnt} folds")
-    test_preds /= fold_cnt * cfg.inference.num_tta
+    test_preds /= fold_cnt
     if cfg.reproduce:
-        test_metrics = {
-            k: v / fold_cnt / cfg.inference.num_tta for k, v in test_metrics.items()
-        }
+        test_metrics = {k: v / fold_cnt for k, v in test_metrics.items()}
         print_metrics(test_metrics)
         save_test_preds(cfg, data, test_preds, test_metrics)
         make_submission_file(cfg, data, test_preds)

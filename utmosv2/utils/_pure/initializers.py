@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from typing import TYPE_CHECKING
 
 import torch
@@ -49,9 +50,16 @@ def get_dataloader(
             pin_memory=True,
         )
     elif phase == "test":
+        if cfg.inference.batch_size != 1:
+            warnings.warn(
+                f"cfg.inference.batch_size ({cfg.inference.batch_size}) is ignored: "
+                "inference consumes the whole audio, so the number of samples per item "
+                "varies and only a batch size of 1 can be collated. The spectrogram "
+                "backbones are still batched over the frame groups internally."
+            )
         return torch.utils.data.DataLoader(
             dataset,
-            batch_size=cfg.inference.batch_size,
+            batch_size=1,
             shuffle=False,
             num_workers=cfg.num_workers,
             pin_memory=True,

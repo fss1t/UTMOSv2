@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import warnings
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
@@ -47,7 +48,13 @@ def configure_inference_args(cfg: Config, args: argparse.Namespace) -> None:
     cfg.save_path = Path("models") / cfg.config_name  # type: ignore
     cfg.predict_dataset = args.predict_dataset  # type: ignore
     cfg.final = args.final  # type: ignore
-    cfg.inference.num_tta = args.num_repetitions  # type: ignore
+    if args.num_repetitions != 1:
+        warnings.warn(
+            f"--num_repetitions ({args.num_repetitions}) is ignored: inference is "
+            "deterministic and covers the whole audio, so repeating it only recomputes "
+            "the same predictions."
+        )
+    cfg.inference.num_tta = 1  # type: ignore
     cfg.reproduce = args.reproduce  # type: ignore
     cfg.out_path = args.out_path and Path(args.out_path)  # type: ignore
     cfg.data_config = None  # type: ignore

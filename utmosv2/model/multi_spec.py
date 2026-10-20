@@ -13,6 +13,36 @@ if TYPE_CHECKING:
     from utmosv2._settings._config import Config
 
 
+def _split_frame_groups(x: torch.Tensor, per_group: int) -> torch.Tensor:
+    """Fold groups of frames into the batch dimension.
+
+    At inference a sample carries `num_groups * per_group` frames covering the whole
+    audio, whereas the model was trained on exactly `per_group` frames. Stacking the
+    groups along the batch axis keeps each group's pooling statistics identical to
+    training (`torch.max` over the concatenated frames grows with the number of frames,
+    so a single wide forward would bias the output by the duration) and lets the
+    backbones run with a batch of `num_groups`.
+
+    Args:
+        x (torch.Tensor): Input of shape (1, num_groups * per_group, channels, height, width).
+        per_group (int): Number of frames the model was trained with.
+
+    Returns:
+        torch.Tensor: Input of shape (num_groups, per_group, channels, height, width).
+    """
+    if x.shape[0] != 1:
+        raise ValueError(
+            "Whole-audio inference requires a batch size of 1, "
+            f"but got a batch of {x.shape[0]}."
+        )
+    if x.shape[1] % per_group != 0:
+        raise ValueError(
+            f"The number of frames ({x.shape[1]}) must be a multiple of "
+            f"num_frames * len(specs) ({per_group})."
+        )
+    return x.reshape(-1, per_group, *x.shape[2:])
+
+
 class MultiSpecModelV2(nn.Module):
     """
     A multi-spectrogram model (version 2) that processes multiple spectrograms
@@ -76,11 +106,17 @@ class MultiSpecModelV2(nn.Module):
         Args:
             x (torch.Tensor):
                 Input tensor of shape (batch_size, num_frames, channels, width, height).
+                At inference the second dimension may hold several groups of `num_frames`
+                covering the whole audio, in which case the groups are averaged.
 
         Returns:
             torch.Tensor:
                 Output tensor after applying backbones, pooling, and fully connected layers.
         """
+        per_group = self.cfg.dataset.spec_frames.num_frames * len(self.cfg.dataset.specs)
+        grouped = x.shape[1] != per_group
+        if grouped:
+            x = _split_frame_groups(x, per_group)
         xl = [
             x[:, i, :, :, :].squeeze(1)
             for i in range(
@@ -106,6 +142,8 @@ class MultiSpecModelV2(nn.Module):
             y, _ = self.attn(xt, xt, xt)
             x = torch.cat([torch.mean(y, dim=1), torch.max(x, dim=2).values], dim=1)
         x = self.fc(x)
+        if grouped:
+            x = x.mean(dim=0, keepdim=True)
         return x
 
 
@@ -173,6 +211,11 @@ class MultiSpecExtModel(nn.Module):
         )
 
     def forward(self, x: torch.Tensor, d: torch.Tensor) -> torch.Tensor:
+        per_group = self.cfg.dataset.spec_frames.num_frames * len(self.cfg.dataset.specs)
+        grouped = x.shape[1] != per_group
+        if grouped:
+            x = _split_frame_groups(x, per_group)
+            d = d.expand(x.shape[0], -1)
         xl = [
             x[:, i, :, :, :].squeeze(1)
             for i in range(
@@ -198,4 +241,9 @@ class MultiSpecExtModel(nn.Module):
             y, _ = self.attn(xt, xt, xt)
             x = torch.cat([torch.mean(y, dim=1), torch.max(x, dim=2).values], dim=1)
         x = self.fc(torch.cat([x, d], dim=1))
+        if grouped:
+            # `fc` is affine, so averaging here is identical to averaging the predictions
+            # of each group. When this model is the spectrogram branch of a fusion model
+            # its `fc` is an Identity and the averaged features are what gets returned.
+            x = x.mean(dim=0, keepdim=True)
         return x
